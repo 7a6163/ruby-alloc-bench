@@ -22,13 +22,30 @@ COOLDOWN=${COOLDOWN:-30}
 RESULTS=${RESULTS:-$(cd "$(dirname "$0")/.." && pwd)/results}
 
 # label:LD_PRELOAD:extra env
+# label:LD_PRELOAD:space-separated env
 LINES=(
   "glibc-default::"
   "glibc-arena2::MALLOC_ARENA_MAX=2"
+  "glibc-trim::MALLOC_ARENA_MAX=2 MALLOC_TRIM_THRESHOLD_=131072"
   "jemalloc:/alloc/libjemalloc.so:"
   "tcmalloc:/alloc/libtcmalloc.so:"
   "mimalloc:/alloc/libmimalloc.so:"
+  "mimalloc-v2:/alloc/libmimalloc2.so:"
+  "snmalloc:/alloc/libsnmalloc.so:"
 )
+
+# ONLY="a b c" runs just those labels. Lets a second batch add lines without
+# re-running the ones already measured.
+ONLY=${ONLY:-}
+selected() { [ -z "$ONLY" ] || case " $ONLY " in *" $1 "*) return 0;; *) return 1;; esac; }
+
+# extra holds zero or more "K=V", so it has to expand to one -e per pair.
+docker_env() {
+  local preload=$1 extra=$2
+  ENVARGS=()
+  [ -n "$preload" ] && ENVARGS+=(-e "LD_PRELOAD=$preload")
+  local kv; for kv in $extra; do ENVARGS+=(-e "$kv"); done
+}
 
 mkdir -p "$RESULTS"
 
@@ -51,9 +68,10 @@ fi
 echo "== preflight =="
 for line in "${LINES[@]}"; do
   IFS=: read -r label preload extra <<<"$line"
-  out=$(docker run --rm --entrypoint ruby \
-    ${preload:+-e LD_PRELOAD="$preload"} ${extra:+-e "$extra"} \
-    "$IMAGE" -e 'puts File.read("/proc/self/maps")' | grep -cE 'jemalloc|tcmalloc|mimalloc' || true)
+  selected "$label" || continue
+  docker_env "$preload" "$extra"
+  out=$(docker run --rm --entrypoint ruby "${ENVARGS[@]}" \
+    "$IMAGE" -e 'puts File.read("/proc/self/maps")' | grep -cE 'jemalloc|tcmalloc|mimalloc|snmalloc' || true)
   if [ -z "$preload" ]; then
     [ "$out" -eq 0 ] || { echo "FAIL $label: unexpected allocator mapped"; exit 1; }
   else
@@ -67,13 +85,15 @@ echo "== $ROUNDS round(s) x ${#LINES[@]} lines x ${DURATION}s =="
 for r in $(seq 1 "$ROUNDS"); do
   for line in "${LINES[@]}"; do
     IFS=: read -r label preload extra <<<"$line"
+    selected "$label" || continue
+    docker_env "$preload" "$extra"
     csv="$RESULTS/${WORKLOAD}-${label}-r${r}.csv"
     echo "-- round $r: $label"
     docker run --rm \
       --cpuset-cpus="$CPUSET" --memory="$MEMORY" \
       -e WORKLOAD="$WORKLOAD" -e DURATION="$DURATION" -e THREADS="$THREADS" \
       -e LABEL="$label" -e OUT=/results/$(basename "$csv") \
-      ${preload:+-e LD_PRELOAD="$preload"} ${extra:+-e "$extra"} \
+      "${ENVARGS[@]}" \
       -v "$RESULTS:/results" \
       "$IMAGE"
     sleep "$COOLDOWN"

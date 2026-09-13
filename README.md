@@ -10,6 +10,14 @@ Rails process's RSS? Five lines, one machine, sequential, `LD_PRELOAD` only.
 | `jemalloc`      | 5.3.1, built from source |
 | `tcmalloc`      | gperftools 2.18.1, `libtcmalloc_minimal.so` |
 | `mimalloc`      | v3.5.1, built from source |
+| `mimalloc-v2`   | v2.5.2 — v3 rewrote the free-list sharding, so v2 is a different design, not an older build |
+| `snmalloc`      | 0.7.5, message-passing design |
+| `glibc-trim`    | `MALLOC_ARENA_MAX=2` + `MALLOC_TRIM_THRESHOLD_=131072` |
+
+`glibc-trim` exists for the same reason as `glibc-arena2`: arenas are not
+glibc's only knob. A Rails process whose RSS will not come down is often not
+fragmented, it is glibc hoarding freed memory rather than returning it —
+`MALLOC_TRIM_THRESHOLD_` is what decides when it lets go.
 
 `glibc-arena2` exists because most "jemalloc saved us 30% RSS" stories are
 really glibc's per-thread arenas (default cap: 8 × cores) going wide. If one
@@ -21,6 +29,10 @@ environment variable closes the gap, that is the answer — not a C dependency.
 ./bench/run.sh                          # 1200s × 3 rounds × 5 lines ≈ 5h
 DURATION=120 ROUNDS=1 ./bench/run.sh    # smoke
 WORKLOAD=synth ./bench/run.sh           # synthetic churn instead of Rails
+
+# Add lines to an existing results/ without re-running what is already measured.
+# Writing into the same directory is what lets the report compute "vs glibc".
+ONLY="glibc-trim mimalloc-v2 snmalloc" ./bench/run.sh
 ```
 
 Output lands in `results/`: one CSV per run, plus `REPORT.md` and

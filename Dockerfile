@@ -11,6 +11,8 @@ FROM ${RUBY_IMAGE} AS alloc-builder
 ARG JEMALLOC_VER=5.3.1
 ARG GPERFTOOLS_VER=2.18.1
 ARG MIMALLOC_VER=v3.5.1
+ARG MIMALLOC2_VER=v2.5.2
+ARG SNMALLOC_VER=0.7.5
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential autoconf automake libtool cmake git ca-certificates \
@@ -38,11 +40,27 @@ RUN git clone --depth 1 --branch "${MIMALLOC_VER}" https://github.com/microsoft/
              -DMI_BUILD_OBJECT=OFF -DMI_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
  && make -j"$(nproc)" && make install
 
+# mimalloc v3 rewrote the free-list sharding; v2 is a different design, not an
+# older build of the same one. Worth its own line.
+RUN git clone --depth 1 --branch "${MIMALLOC2_VER}" https://github.com/microsoft/mimalloc.git mimalloc2 \
+ && cd mimalloc2 && mkdir build && cd build \
+ && cmake .. -DCMAKE_INSTALL_PREFIX=/opt/alloc/mimalloc2 -DMI_BUILD_STATIC=OFF \
+             -DMI_BUILD_OBJECT=OFF -DMI_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
+ && make -j"$(nproc)" && make install
+
+RUN git clone --depth 1 --branch "${SNMALLOC_VER}" https://github.com/microsoft/snmalloc.git \
+ && cd snmalloc && mkdir build && cd build \
+ && cmake .. -DCMAKE_BUILD_TYPE=Release -DSNMALLOC_BUILD_TESTING=OFF \
+ && make -j"$(nproc)" snmallocshim \
+ && find . -name "libsnmallocshim*.so" -exec cp -L {} /opt/alloc/libsnmallocshim.so \;
+
 # Flatten to stable filenames so run.sh does not have to know version suffixes.
 RUN mkdir -p /alloc \
  && cp -L /opt/alloc/jemalloc/lib/libjemalloc.so.2      /alloc/libjemalloc.so \
  && cp -L /opt/alloc/tcmalloc/lib/libtcmalloc_minimal.so /alloc/libtcmalloc.so \
  && cp -L "$(ls /opt/alloc/mimalloc/lib/libmimalloc.so.* | head -1)" /alloc/libmimalloc.so \
+ && cp -L "$(ls /opt/alloc/mimalloc2/lib/libmimalloc.so.* | head -1)" /alloc/libmimalloc2.so \
+ && cp -L /opt/alloc/libsnmallocshim.so                  /alloc/libsnmalloc.so \
  && ls -l /alloc
 
 

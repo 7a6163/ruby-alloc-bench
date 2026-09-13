@@ -3,9 +3,10 @@
 #   ruby bench/report.rb results/
 
 DIR    = ARGV[0] || "results"
-ORDER  = %w[glibc-default glibc-arena2 jemalloc tcmalloc mimalloc]
-COLORS = { "glibc-default" => "#888888", "glibc-arena2" => "#3b7dd8",
-           "jemalloc" => "#1f9d55", "tcmalloc" => "#d97706", "mimalloc" => "#c2410c" }
+ORDER  = %w[glibc-default glibc-arena2 glibc-trim jemalloc tcmalloc mimalloc mimalloc-v2 snmalloc]
+COLORS = { "glibc-default" => "#888888", "glibc-arena2" => "#3b7dd8", "glibc-trim" => "#1d4ed8",
+           "jemalloc" => "#1f9d55", "tcmalloc" => "#d97706", "mimalloc" => "#c2410c",
+           "mimalloc-v2" => "#ea580c", "snmalloc" => "#7c3aed" }
 
 Run = Struct.new(:workload, :label, :round, :rows, :p99_ms, :duration, :facts, keyword_init: true) do
   # Drop boot/warmup, then score on a trailing window -- RSS right after boot
