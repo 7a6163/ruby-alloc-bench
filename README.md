@@ -1,0 +1,102 @@
+# ruby-benchmark — Ruby 4.0 allocator comparison
+
+Does swapping glibc malloc for jemalloc / tcmalloc / mimalloc actually cut a
+Rails process's RSS? Five lines, one machine, sequential, `LD_PRELOAD` only.
+
+| line | how |
+|---|---|
+| `glibc-default` | whatever ships in `ruby:4.0-slim-trixie` |
+| `glibc-arena2`  | same, `MALLOC_ARENA_MAX=2` |
+| `jemalloc`      | 5.3.1, built from source |
+| `tcmalloc`      | gperftools 2.18.1, `libtcmalloc_minimal.so` |
+| `mimalloc`      | v3.5.1, built from source |
+
+`glibc-arena2` exists because most "jemalloc saved us 30% RSS" stories are
+really glibc's per-thread arenas (default cap: 8 × cores) going wide. If one
+environment variable closes the gap, that is the answer — not a C dependency.
+
+## Run it
+
+```sh
+./bench/run.sh                          # 1200s × 3 rounds × 5 lines ≈ 5h
+DURATION=120 ROUNDS=1 ./bench/run.sh    # smoke
+WORKLOAD=synth ./bench/run.sh           # synthetic churn instead of Rails
+```
+
+Output lands in `results/`: one CSV per run, plus `REPORT.md` and
+`rss-<workload>.svg`.
+
+## Design
+
+- **Workload**: yjit-bench's railsbench (Rails 8.1, sqlite, pinned SHA), driven
+  in-process through `Rack::MockRequest` from 5 threads. Multi-threaded on
+  purpose — single-threaded never triggers the glibc arena behaviour that this
+  whole comparison is about. `WORKLOAD=synth` swaps in Rails-shaped allocation
+  churn without Rails.
+- **Concurrency**: one process, 5 threads. No Puma cluster mode: `fork` makes
+  parent and child share pages, so RSS double-counts and you would have to
+  measure PSS instead. That is a different benchmark.
+- **Primary metric**: median RSS over the final window, after warmup. Peak RSS,
+  req/s and p99 are recorded but are not what the decision hangs on.
+- **`GC.stat` is recorded every sample** so you can tell "this allocator used
+  less memory" apart from "this allocator made Ruby GC harder".
+- **p99** comes from a per-thread ring buffer allocated before the run and
+  sorted only after the last sample — computing percentiles mid-run would
+  allocate inside the process being measured.
+- Every round runs alone with `--cpuset-cpus=0-1 --memory=4g` and a cooldown between.
+  `run.sh` preflights each line by grepping `/proc/self/maps`, so a silently
+  ignored `LD_PRELOAD` fails loudly instead of producing five glibc results.
+
+## Running it on the VPS
+
+Target: x86_64, Debian 13, 2 dedicated vCPU / 8 GB (matches the production
+target; the container already is Debian 13 + glibc 2.41 + THP `madvise`).
+
+2 cores, not 1 and not 4: measured, under the GVL 4 cores bought 1.6% more
+requests than 1. The second core is there so the sampler thread is not fighting
+the workers for the same CPU.
+
+```sh
+apt-get update && apt-get install -y docker.io git
+git clone <this repo> ruby-benchmark && cd ruby-benchmark
+nohup ./bench/run.sh > run.log 2>&1 &
+# ... 5 hours later, from your laptop:
+scp -r root@VPS:ruby-benchmark/results .
+```
+
+`run.sh` prints CPU steal before anything else. If it is above ~1% the plan is
+shared-vCPU whatever the product page says, and the timing columns are junk.
+
+## Thread count is the variable that matters
+
+`THREADS=5` is Rails' `RAILS_MAX_THREADS` default. It is also what decides
+whether the glibc arena comparison shows anything: glibc hands each thread its
+own arena on first `malloc`, and the GVL does not prevent that — it only stops
+them running in parallel. Core count merely caps the total (8 × cores), and 5
+threads never reaches that cap.
+
+So if production runs something wider — Sidekiq at `concurrency: 25`, say —
+sweep it:
+
+```sh
+THREADS=25 ./bench/run.sh
+```
+
+That is where `MALLOC_ARENA_MAX=2` earns its keep, and a 5-thread run cannot
+see it.
+
+## CI
+
+`.github/workflows/bench.yml` runs on `ubuntu-24.04-arm` (same arch as the
+local M1 baseline). All five lines share one runner — a matrix would compare
+five different machines.
+
+- push / PR → 90s × 1 round. This is a **harness check**, not data: it proves
+  the image builds, every `LD_PRELOAD` still loads, and the report renders.
+- `workflow_dispatch` / weekly cron → 600s × 3 rounds (~2.5h, inside the 6h
+  job cap).
+
+Treat CI timing numbers as unusable: GitHub runners are shared vCPUs with
+noisy neighbours, and req/s/p99 swing well beyond the effect being measured.
+RSS holds up better but still deserves a local confirmation before you change
+anything in production.

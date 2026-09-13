@@ -1,0 +1,60 @@
+name: allocator-bench
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: seconds per line per round
+        default: "600"
+      rounds:
+        description: rounds per line
+        default: "3"
+      workload:
+        description: rails or synth
+        default: "rails"
+  schedule:
+    - cron: "0 3 * * 0"   # weekly full run
+
+jobs:
+  bench:
+    # x86_64 Debian-family, matching the production target. All five lines share
+    # one runner -- a matrix would compare five different machines.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: ruby-alloc-bench
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run
+        env:
+          # push/PR get a smoke run: enough to prove the harness and every
+          # LD_PRELOAD still work. Real numbers come from dispatch/schedule.
+          DURATION: ${{ inputs.duration || (github.event_name == 'schedule' && '600' || '90') }}
+          ROUNDS: ${{ inputs.rounds || (github.event_name == 'schedule' && '3' || '1') }}
+          WORKLOAD: ${{ inputs.workload || 'rails' }}
+          COOLDOWN: 10
+          CPUSET: "0-1"
+          SKIP_BUILD: "1"
+        run: ./bench/run.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ github.run_id }}
+          path: results/
+
+      - name: Summary
+        if: always()
+        run: cat results/REPORT.md >> "$GITHUB_STEP_SUMMARY"
