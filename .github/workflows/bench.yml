@@ -1,8 +1,12 @@
 name: allocator-bench
 
 on:
+  # A README typo should not spend 20 minutes of x86 runner time rebuilding
+  # three allocators from source.
   push:
+    paths-ignore: ["**.md"]
   pull_request:
+    paths-ignore: ["**.md"]
   workflow_dispatch:
     inputs:
       duration:
