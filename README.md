@@ -25,37 +25,50 @@ environment variable closes the gap, that is the answer — not a C dependency.
 
 ## Results
 
-Vultr dedicated-vCPU box, 2026-09-13. 1200s x 3 rounds x 5 lines, ~30M requests.
+Vultr dedicated-vCPU box, 2026-09-13. 1200s x 3 rounds x 8 lines, ~48M requests.
 CPU steal held at 0.003% throughout, so the machine really was dedicated.
 
 ```
 x86_64 · 2 cores · glibc 2.41 · THP always · ruby 4.0.6 · YJIT true
 ```
 
-![RSS over time under five allocators](results/rss-rails.svg)
+![RSS over time under eight allocators](results/rss-rails.svg)
 
 | allocator | RSS median | vs glibc | req/s | p99 ms | major GC | spread over 3 rounds |
 |---|--:|--:|--:|--:|--:|--:|
-| **jemalloc** | **174.5 MB** | **-5.1%** | 1751 | 17.79 | **36** | 1.33% |
+| **jemalloc** | **174.5 MB** | **-5.1%** | **1751** | 17.79 | **36** | 1.33% |
+| **mimalloc-v2** | **174.6 MB** | **-5.0%** | 1695 | 17.52 | 39 | 0.96% |
+| glibc-trim | 176.4 MB | -4.1% | 1651 | 18.86 | 63 | 0.33% |
 | glibc-arena2 | 177.0 MB | -3.7% | 1639 | 17.89 | 49 | 0.45% |
 | glibc-default | 183.9 MB | +0.0% | 1662 | 18.04 | 52 | 0.04% |
 | mimalloc (v3) | 190.7 MB | +3.7% | 1681 | 17.29 | 33 | 0.77% |
 | tcmalloc | 194.8 MB | +5.9% | 1727 | 19.24 | 38 | 0.65% |
+| snmalloc | 195.5 MB | +6.3% | 1750 | 16.65 | 40 | 0.57% |
 
 **The differences are real.** Round-to-round spread tops out at 1.33% while the
-gaps between allocators run 3.7-5.9%, so the ranking is signal, not luck.
+gaps span 11.4 points, so the ranking is signal rather than luck.
 
-**jemalloc wins on every axis at once** — lowest RSS, highest throughput
-(+5.4%), fewest major GCs (36 vs 52). No memory-for-CPU trade hiding in it.
+**jemalloc and mimalloc v2 tie at the top**, 0.1 MB apart — inside the noise
+band, so treat them as equal on memory. jemalloc takes it on the tiebreakers:
+highest throughput (+5.4% over glibc) and the fewest major GCs of any line.
 
-**`MALLOC_ARENA_MAX=2` gets most of the way there for free**, and it costs one
-environment variable instead of a C dependency. It does buy part of its -3.7%
-with GC work, though: 49 major GCs against glibc's 52 and jemalloc's 36.
+**mimalloc v3 is 16 MB worse than mimalloc v2** — +3.7% against -5.0%, from the
+same project. v3's free-list sharding rewrite is a different allocator wearing
+the same name, and the version you get from a distro package decides which one
+you are running. Pin it.
 
-**tcmalloc and mimalloc are net negatives here.** Neither is GC-starved —
-mimalloc ran the fewest major GCs of anyone — they simply hold more memory.
-THP `always` is the likely cause: both mmap heavily, and huge-page granularity
-rounds that up. On a `madvise` host they may well look different.
+**glibc's own knobs get you most of the way, and one of them is a trap.**
+`MALLOC_ARENA_MAX=2` is -3.7% for a single environment variable and no
+dependency — genuinely good value. Adding `MALLOC_TRIM_THRESHOLD_` buys another
+0.4 points and costs 63 major GCs against glibc's 52: returning memory to the OS
+churns `malloc_increase`, which makes Ruby collect more often. You paid CPU for
+that last 0.4%.
+
+**tcmalloc, snmalloc and mimalloc v3 are net negatives here.** None is
+GC-starved — mimalloc v3 ran the fewest major GCs of anyone — they simply hold
+more memory. THP `always` is the likely cause: all three mmap heavily and
+huge-page granularity rounds that up. On a `madvise` host they may look
+different; the report header records which you measured.
 
 Raw CSVs are deliberately not committed. The harness is the artifact: anyone
 who doubts the numbers can run `./bench/run.sh` and produce their own, on their
@@ -67,10 +80,11 @@ own hardware, which is worth more than trusting a table of mine.
   `concurrency: 25` would give glibc's arenas far more room to misbehave, and
   the gap could widen. See "Thread count is the variable that matters".
 - Even at 1200s the curves are still creeping up very slightly. This is close
-  to steady state, not absolutely at it; the ranking is settled long before the
-  absolute numbers are.
-- 5% RSS is real but modest. Ruby-side GC tuning (`RUBY_GC_OLDMALLOC_LIMIT_MAX`,
-  compaction) is untested here and may be worth more, with no new dependency.
+  to steady state, not absolutely at it; the ranking settles long before the
+  absolute numbers do.
+- 5% RSS is real but modest. Ruby-side GC tuning
+  (`RUBY_GC_OLDMALLOC_LIMIT_MAX`, compaction) is untested here and may be worth
+  more, with no new dependency.
 
 ## Run it
 
