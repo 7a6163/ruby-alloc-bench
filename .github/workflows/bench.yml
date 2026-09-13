@@ -21,6 +21,13 @@ on:
   schedule:
     - cron: "0 3 * * 0"   # weekly full run
 
+# New push supersedes the in-flight smoke run. But a dispatched or scheduled
+# full run is 2.5 hours of real data -- nobody's unrelated commit gets to kill
+# it, so only push/PR runs are cancellable.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
 jobs:
   bench:
     # x86_64 Debian-family, matching the production target. All five lines share
