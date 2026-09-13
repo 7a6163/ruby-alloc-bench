@@ -32,6 +32,8 @@ CPU steal held at 0.003% throughout, so the machine really was dedicated.
 x86_64 · 2 cores · glibc 2.41 · THP always · ruby 4.0.6 · YJIT true
 ```
 
+![RSS over time under five allocators](results/rss-rails.svg)
+
 | allocator | RSS median | vs glibc | req/s | p99 ms | major GC | spread over 3 rounds |
 |---|--:|--:|--:|--:|--:|--:|
 | **jemalloc** | **174.5 MB** | **-5.1%** | 1751 | 17.79 | **36** | 1.33% |
@@ -55,11 +57,18 @@ mimalloc ran the fewest major GCs of anyone — they simply hold more memory.
 THP `always` is the likely cause: both mmap heavily, and huge-page granularity
 rounds that up. On a `madvise` host they may well look different.
 
+Raw CSVs are deliberately not committed. The harness is the artifact: anyone
+who doubts the numbers can run `./bench/run.sh` and produce their own, on their
+own hardware, which is worth more than trusting a table of mine.
+
 ### What this does not say
 
 - One workload (railsbench), 5 threads, one process. A Sidekiq-shaped run at
   `concurrency: 25` would give glibc's arenas far more room to misbehave, and
   the gap could widen. See "Thread count is the variable that matters".
+- Even at 1200s the curves are still creeping up very slightly. This is close
+  to steady state, not absolutely at it; the ranking is settled long before the
+  absolute numbers are.
 - 5% RSS is real but modest. Ruby-side GC tuning (`RUBY_GC_OLDMALLOC_LIMIT_MAX`,
   compaction) is untested here and may be worth more, with no new dependency.
 

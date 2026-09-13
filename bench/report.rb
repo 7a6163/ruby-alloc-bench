@@ -4,9 +4,12 @@
 
 DIR    = ARGV[0] || "results"
 ORDER  = %w[glibc-default glibc-arena2 glibc-trim jemalloc tcmalloc mimalloc mimalloc-v2 snmalloc]
-COLORS = { "glibc-default" => "#888888", "glibc-arena2" => "#3b7dd8", "glibc-trim" => "#1d4ed8",
-           "jemalloc" => "#1f9d55", "tcmalloc" => "#d97706", "mimalloc" => "#c2410c",
-           "mimalloc-v2" => "#ea580c", "snmalloc" => "#7c3aed" }
+# Validated categorical order (light surface #fcfcfb): all six checks pass,
+# worst adjacent CVD dE 9.1. Three slots sit under 3:1 contrast, which the
+# right-edge direct labels and the README table are the required relief for.
+# Assigned in fixed order -- never recoloured when a line is added or dropped.
+COLORS = %w[#2a78d6 #eb6834 #1baf7a #eda100 #e87ba4 #008300 #4a3aa7 #e34948]
+SURFACE, INK, MUTED, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e8e8e4"
 
 Run = Struct.new(:workload, :label, :round, :rows, :p99_ms, :duration, :facts, keyword_init: true) do
   # Drop boot/warmup, then score on a trailing window -- RSS right after boot
@@ -80,32 +83,51 @@ header = "# Ruby allocator benchmark\n\n" \
 File.write(File.join(DIR, "REPORT.md"), header + out.join("\n") + "\n")
 
 # --- RSS over time, median round per allocator --------------------------------
-W, H, PAD = 900, 420, 56
+W, H, PADL, PADR, PADT, PADB = 940, 460, 64, 168, 40, 56
 runs.group_by(&:workload).each do |workload, wruns|
-  picks = wruns.group_by(&:label).map do |label, rs|
-    [label, rs.sort_by(&:rss_median)[rs.size / 2]]
-  end.sort_by { |label, _| ORDER.index(label) || 99 }
+  picks = wruns.group_by(&:label).map { |label, rs| [label, rs.sort_by(&:rss_median)[rs.size / 2]] }
+              .sort_by { |label, _| ORDER.index(label) || 99 }
 
   max_t = picks.map { |_, r| r.duration }.max
-  max_y = picks.flat_map { |_, r| r.rows.map { |x| x[:rss] } }.max * 1.08
-  sx = ->(t) { PAD + (t / max_t) * (W - PAD - 150) }
-  sy = ->(v) { H - PAD - (v / max_y) * (H - 2 * PAD) }
+  vals  = picks.flat_map { |_, r| r.rows.map { |x| x[:rss] } }
+  # Not zero-based: the whole question is a 5% gap, and a 0-211MB axis flattens
+  # every line into one band at the top. Nothing is clipped -- the domain covers
+  # every plotted point -- and the axis says so in words.
+  lo, hi = vals.min, vals.max
+  pad = (hi - lo) * 0.08
+  lo -= pad; hi += pad
+  sx = ->(t) { PADL + (t / max_t) * (W - PADL - PADR) }
+  sy = ->(v) { H - PADB - ((v - lo) / (hi - lo)) * (H - PADT - PADB) }
 
-  svg = +%(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 #{W} #{H}" font-family="ui-monospace,monospace" font-size="11">)
-  svg << %(<rect width="#{W}" height="#{H}" fill="#fff"/>)
-  4.downto(0) do |i|
-    v = max_y * i / 4
-    svg << %(<line x1="#{PAD}" y1="#{sy[v].round(1)}" x2="#{W - 150}" y2="#{sy[v].round(1)}" stroke="#e5e5e5"/>)
-    svg << %(<text x="#{PAD - 6}" y="#{sy[v].round(1) + 4}" text-anchor="end" fill="#666">#{(v / 1024).round} MB</text>)
+  svg = +%(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 #{W} #{H}" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12">)
+  svg << %(<rect width="#{W}" height="#{H}" fill="#{SURFACE}"/>)
+  svg << %(<text x="#{PADL}" y="22" fill="#{INK}" font-size="13" font-weight="600">Resident set size over #{max_t.round}s — #{workload}</text>)
+
+  # The window the table scores on, so the chart and the numbers agree visibly.
+  wx = sx[max_t - [300.0, max_t * 0.4].min]
+  svg << %(<rect x="#{wx.round(1)}" y="#{PADT}" width="#{(sx[max_t] - wx).round(1)}" height="#{H - PADT - PADB}" fill="#000" opacity="0.035"/>)
+  svg << %(<text x="#{((wx + sx[max_t]) / 2).round}" y="#{PADT - 8}" text-anchor="middle" fill="#{MUTED}" font-size="10">scoring window</text>)
+
+  5.times do |i|
+    v = lo + (hi - lo) * i / 4.0
+    y = sy[v].round(1)
+    svg << %(<line x1="#{PADL}" y1="#{y}" x2="#{W - PADR}" y2="#{y}" stroke="#{GRID}"/>)
+    svg << %(<text x="#{PADL - 8}" y="#{y + 4}" text-anchor="end" fill="#{MUTED}" font-size="11">#{(v / 1024).round} MB</text>)
   end
-  svg << %(<text x="#{PAD}" y="#{H - 16}" fill="#666">0s</text>)
-  svg << %(<text x="#{W - 150}" y="#{H - 16}" text-anchor="end" fill="#666">#{max_t.round}s</text>)
+  svg << %(<text x="#{PADL}" y="#{H - 30}" fill="#{MUTED}" font-size="11">0s</text>)
+  svg << %(<text x="#{W - PADR}" y="#{H - 30}" text-anchor="end" fill="#{MUTED}" font-size="11">#{max_t.round}s</text>)
+  svg << %(<text x="#{PADL}" y="#{H - 12}" fill="#{MUTED}" font-size="10">y axis does not start at zero</text>)
 
   picks.each_with_index do |(label, r), i|
+    c = COLORS[ORDER.index(label) || i]
     pts = r.rows.map { |x| "#{sx[x[:t]].round(1)},#{sy[x[:rss]].round(1)}" }.join(" ")
-    c = COLORS[label] || "#333"
-    svg << %(<polyline fill="none" stroke="#{c}" stroke-width="1.6" points="#{pts}"/>)
-    svg << %(<text x="#{W - 138}" y="#{PAD + i * 18}" fill="#{c}">#{label}</text>)
+    svg << %(<polyline fill="none" stroke="#{c}" stroke-width="2" stroke-linejoin="round" points="#{pts}"/>)
+    ly = PADT + 8 + i * 30
+    # Colour rides the swatch, not the text: the label stays legible for the
+    # slots that sit under 3:1 on this surface.
+    svg << %(<line x1="#{W - PADR + 10}" y1="#{ly - 4}" x2="#{W - PADR + 28}" y2="#{ly - 4}" stroke="#{c}" stroke-width="3" stroke-linecap="round"/>)
+    svg << %(<text x="#{W - PADR + 34}" y="#{ly}" fill="#{INK}" font-size="11">#{label}</text>)
+    svg << %(<text x="#{W - PADR + 34}" y="#{ly + 12}" fill="#{MUTED}" font-size="10">#{(r.rss_median / 1024.0).round(1)} MB</text>)
   end
   svg << "</svg>"
   File.write(File.join(DIR, "rss-#{workload}.svg"), svg)
