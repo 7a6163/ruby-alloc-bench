@@ -100,4 +100,9 @@ for r in $(seq 1 "$ROUNDS"); do
   done
 done
 
-ruby "$(dirname "$0")/report.rb" "$RESULTS"
+# In the image, not on the host: the host is a throwaway box that has docker
+# and nothing else. Assuming a host ruby is how this step died at the finish
+# line after five hours of measurement.
+docker run --rm -v "$RESULTS:/results" \
+  -v "$(cd "$(dirname "$0")" && pwd):/bench-src:ro" \
+  --entrypoint ruby "$IMAGE" /bench-src/report.rb /results

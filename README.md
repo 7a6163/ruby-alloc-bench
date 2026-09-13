@@ -23,6 +23,46 @@ fragmented, it is glibc hoarding freed memory rather than returning it —
 really glibc's per-thread arenas (default cap: 8 × cores) going wide. If one
 environment variable closes the gap, that is the answer — not a C dependency.
 
+## Results
+
+Vultr dedicated-vCPU box, 2026-09-13. 1200s x 3 rounds x 5 lines, ~30M requests.
+CPU steal held at 0.003% throughout, so the machine really was dedicated.
+
+```
+x86_64 · 2 cores · glibc 2.41 · THP always · ruby 4.0.6 · YJIT true
+```
+
+| allocator | RSS median | vs glibc | req/s | p99 ms | major GC | spread over 3 rounds |
+|---|--:|--:|--:|--:|--:|--:|
+| **jemalloc** | **174.5 MB** | **-5.1%** | 1751 | 17.79 | **36** | 1.33% |
+| glibc-arena2 | 177.0 MB | -3.7% | 1639 | 17.89 | 49 | 0.45% |
+| glibc-default | 183.9 MB | +0.0% | 1662 | 18.04 | 52 | 0.04% |
+| mimalloc (v3) | 190.7 MB | +3.7% | 1681 | 17.29 | 33 | 0.77% |
+| tcmalloc | 194.8 MB | +5.9% | 1727 | 19.24 | 38 | 0.65% |
+
+**The differences are real.** Round-to-round spread tops out at 1.33% while the
+gaps between allocators run 3.7-5.9%, so the ranking is signal, not luck.
+
+**jemalloc wins on every axis at once** — lowest RSS, highest throughput
+(+5.4%), fewest major GCs (36 vs 52). No memory-for-CPU trade hiding in it.
+
+**`MALLOC_ARENA_MAX=2` gets most of the way there for free**, and it costs one
+environment variable instead of a C dependency. It does buy part of its -3.7%
+with GC work, though: 49 major GCs against glibc's 52 and jemalloc's 36.
+
+**tcmalloc and mimalloc are net negatives here.** Neither is GC-starved —
+mimalloc ran the fewest major GCs of anyone — they simply hold more memory.
+THP `always` is the likely cause: both mmap heavily, and huge-page granularity
+rounds that up. On a `madvise` host they may well look different.
+
+### What this does not say
+
+- One workload (railsbench), 5 threads, one process. A Sidekiq-shaped run at
+  `concurrency: 25` would give glibc's arenas far more room to misbehave, and
+  the gap could widen. See "Thread count is the variable that matters".
+- 5% RSS is real but modest. Ruby-side GC tuning (`RUBY_GC_OLDMALLOC_LIMIT_MAX`,
+  compaction) is untested here and may be worth more, with no new dependency.
+
 ## Run it
 
 ```sh
