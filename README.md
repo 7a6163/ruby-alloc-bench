@@ -1,4 +1,4 @@
-# ruby-benchmark — Ruby 4.0 allocator comparison
+# ruby-alloc-bench — Ruby 4.0 allocator comparison
 
 Does swapping glibc malloc for jemalloc / tcmalloc / mimalloc actually cut a
 Rails process's RSS? Five lines, one machine, sequential, `LD_PRELOAD` only.
@@ -58,10 +58,14 @@ the workers for the same CPU.
 
 ```sh
 apt-get update && apt-get install -y docker.io git
-git clone <this repo> ruby-benchmark && cd ruby-benchmark
+# private repo, so either add a deploy key, or just push the tree up from
+# your laptop -- it is a throwaway box, not worth the auth dance:
+#   rsync -a --exclude results ~/Developer/ruby-benchmark/ root@VPS:ruby-alloc-bench/
+git clone git@github.com:7a6163/ruby-alloc-bench.git && cd ruby-alloc-bench
+
 nohup ./bench/run.sh > run.log 2>&1 &
 # ... 5 hours later, from your laptop:
-scp -r root@VPS:ruby-benchmark/results .
+scp -r root@VPS:ruby-alloc-bench/results .
 ```
 
 `run.sh` prints CPU steal before anything else. If it is above ~1% the plan is
